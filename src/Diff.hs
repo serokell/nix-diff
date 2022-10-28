@@ -1,7 +1,6 @@
 {-# LANGUAGE ApplicativeDo              #-}
 {-# LANGUAGE BlockArguments             #-}
 {-# LANGUAGE CPP                        #-}
-{-# LANGUAGE DuplicateRecordFields      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE NamedFieldPuns             #-}
@@ -18,7 +17,6 @@ import Data.Attoparsec.Text (IResult(..))
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map)
 import Data.Maybe (catMaybes)
-import Data.Monoid ((<>))
 import Data.Set (Set)
 import Data.Text (Text)
 import Data.Vector (Vector)
@@ -26,12 +24,15 @@ import Nix.Derivation (Derivation, DerivationOutput)
 
 import qualified Control.Monad.Reader
 import qualified Data.Attoparsec.Text
+import qualified Data.ByteString
 import qualified Data.Char            as Char
 import qualified Data.List.NonEmpty
 import qualified Data.Map
 import qualified Data.Set
 import qualified Data.String          as String
 import qualified Data.Text            as Text
+import qualified Data.Text.Encoding
+import qualified Data.Text.Encoding.Error
 import qualified Data.Vector
 import qualified Nix.Derivation
 import qualified Patience
@@ -39,13 +40,11 @@ import qualified System.Directory     as Directory
 import qualified System.FilePath      as FilePath
 import qualified System.Process       as Process
 
-#if MIN_VERSION_base(4,9,0)
+#if !MIN_VERSION_base(4,15,1)
 import Control.Monad.Fail (MonadFail)
-import qualified Data.ByteString
-import qualified Data.Text.Encoding
-import qualified Data.Text.Encoding.Error
 #endif
 
+import Diff.Types
 
 newtype Status = Status { visited :: Set Diffed }
 
@@ -75,97 +74,6 @@ data DiffContext = DiffContext
   }
 
 data Orientation = Character | Word | Line
-
-data Changed a = Changed { before :: a, now :: a }
-
-type OutputHash = Text
-
-type Platform = Text
-
-type Builder = Text
-
-type Argument = Text
-
-data DerivationDiff
-  = DerivationsAreTheSame
-  | AlreadyCompared
-  | NamesDontMatch   { outputStructure :: Changed (FilePath, Set Text)}
-  | OutputsDontMatch { outputStructure :: Changed (FilePath, Set Text)}
-  | DerivationDiff
-      { outputStructure :: Changed (FilePath, Set Text)
-      , outputsDiff     :: OutputsDiff
-      , platformDiff    :: Maybe (Changed Platform)
-        -- ^ Will be Nothing, if Platform does not change
-      , builderDiff     :: Maybe (Changed Builder)
-        -- ^ Will be Nothing, if Builder does not change
-      , argumentsDiff   :: Maybe (NonEmpty (Patience.Item Argument))
-        -- ^ Will be Nothing, if arguments are equal
-      , sourcesDiff     :: SourcesDiff
-      , inputsDiff      :: InputsDiff
-      , envDiff         :: Maybe EnvironmentDiff
-        -- ^ Will be Nothing, if environment comparison is skipped
-      }
-
-
-data OutputsDiff = OutputsDiff
-  { extraOutputs :: Maybe (Changed (Map Text (DerivationOutput FilePath Text)))
-    -- ^ Map from derivation name to it's outputs.
-    --   Will be Nothing, if `Data.Map.difference` gives
-    --   empty Maps for both new and old outputs
-  , outputHashDiff :: [OutputDiff]
-    -- ^ Difference of outputs with the same name.
-    --   Will be empty, if all outputs are equal.
-  }
-
-data OutputDiff = OutputDiff
-  { outputName :: Text
-  , hashDifference :: Changed OutputHash
-  }
-
-data SourcesDiff = SourcesDiff
-  { extraSrcNames :: Maybe (Changed (Set Text))
-    -- ^ Will be Nothing, if there is no extra source names
-  , srcFilesDiff :: [SourceFileDiff]
-  }
-
-data SourceFileDiff
-  = OneSourceFileDiff
-      { srcName :: Text
-      , srcContentDiff :: Maybe [Patience.Item Text]
-      -- ^ Will be Nothing, if any of source files not exists
-      }
-  | SomeSourceFileDiff
-      { srcName :: Text
-      , srcFilesDiff :: Changed [FilePath]
-      }
-
-data InputsDiff = InputsDiff
-  { inputExtraNames :: Maybe (Changed (Set Text))
-    -- ^ Will be Nothing, if there is no extra input names
-  , inputDerivationDiffs :: [InputDerivationsDiff]
-  }
-
-data InputDerivationsDiff
-  = OneDerivationDiff
-      { drvName :: Text
-      , drvDiff :: DerivationDiff
-      }
-  | SomeDerivationsDiff
-      { drvName :: Text
-      , extraPartsDiff :: Changed (Map FilePath (Set Text))
-      }
-
-data EnvVarDiff = EnvVarDiff
-  { envKey :: Text
-  , envValueDiff :: [Patience.Item Text]
-  }
-
-data EnvironmentDiff
-  = EnvironmentsAreEqual
-  | EnvironmentDiff
-      { extraEnvDiff :: Changed (Map Text Text)
-      , envContentDiff :: [EnvVarDiff]
-      }
 
 {-| Extract the name of a derivation (i.e. the part after the hash)
 
@@ -377,7 +285,7 @@ diffText
     -- ^ Left value to compare
     -> Text
     -- ^ Right value to compare
-    -> Diff [Patience.Item Text]
+    -> Diff TextDiff
     -- ^ List of blocks of diffed text
 diffText left right = do
     DiffContext{ orientation } <- ask
@@ -408,7 +316,7 @@ diffText left right = do
                 Line ->
                     Patience.diff leftLines rightLines
 
-    return chunks
+    return (TextDiff chunks)
 
 -- | Diff two environments
 diffEnv
@@ -508,8 +416,8 @@ diffBuilder leftBuilder rightBuilder = do
     then Nothing
     else Just (Changed leftBuilder rightBuilder)
 
-diffArgs :: Vector Text -> Vector Text -> Maybe (NonEmpty (Patience.Item Argument))
-diffArgs leftArgs rightArgs = do
+diffArgs :: Vector Text -> Vector Text -> Maybe ArgumentsDiff
+diffArgs leftArgs rightArgs = fmap ArgumentsDiff do
     if leftArgs == rightArgs
     then Nothing
     else do
@@ -529,7 +437,9 @@ diff topLevel leftPath leftOutputs rightPath rightOutputs = do
     else do
         put (Status (Data.Set.insert diffed visited))
         let
-          outputStructure = Changed (leftPath, leftOutputs) (rightPath, rightOutputs)
+          outputStructure = Changed
+            (OutputStructure leftPath leftOutputs)
+            (OutputStructure rightPath rightOutputs)
 
         if derivationName leftPath /= derivationName rightPath && not topLevel
         then do

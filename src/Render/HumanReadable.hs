@@ -13,7 +13,6 @@ module Render.HumanReadable where
 import Control.Monad (forM_)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, ReaderT, ask, local)
-import Data.Monoid ((<>))
 import Data.Set (Set)
 import Data.Text (Text)
 import Numeric.Natural (Natural)
@@ -25,11 +24,12 @@ import qualified Data.Text            as Text
 import qualified Data.Text.IO         as Text.IO
 import qualified Patience
 
-#if MIN_VERSION_base(4,9,0)
+#if !MIN_VERSION_base(4,15,1)
 import Control.Monad.Fail (MonadFail)
 #endif
 
 import Diff
+import Diff.Types
 
 
 data RenderContext = RenderContext
@@ -151,7 +151,7 @@ renderDiffHumanReadable = \case
 
   where
     renderOutputStructure os =
-      renderWith os \(sign, (path, outputs)) -> do
+      renderWith os \(sign, (OutputStructure path outputs)) -> do
         echo (sign (Text.pack path <> renderOutputs outputs))
 
     renderOutputsDiff OutputsDiff{..} = do
@@ -181,7 +181,7 @@ renderDiffHumanReadable = \case
           echo ("    " <> sign builder)
 
     renderArgsDiff mad =
-      ifExist mad \ad -> do
+      ifExist mad \(ArgumentsDiff ad) -> do
         RenderContext { tty } <- ask
         echo (explain "The arguments do not match")
         let renderDiff (Patience.Old arg) =
@@ -208,7 +208,7 @@ renderDiffHumanReadable = \case
         echo ("    " <> text)
     renderSrcFileDiff SomeSourceFileDiff{..} = do
       echo (explain ("The input sources named `" <> srcName <> "` differ"))
-      renderWith srcFilesDiff \(sign, paths) -> do
+      renderWith srcFileDiff \(sign, paths) -> do
         forM_ paths \path -> do
             echo ("    " <>  sign (Text.pack path))
 
@@ -244,8 +244,8 @@ renderDiffHumanReadable = \case
         text <- renderText envValueDiff
         echo ("    " <> envKey <> "=" <> text)
 
-    renderText :: [Patience.Item Text] -> Render Text
-    renderText chunks = do
+    renderText :: TextDiff -> Render Text
+    renderText (TextDiff chunks) = do
       RenderContext{ indent, orientation, tty } <- ask
 
       let n = fromIntegral indent

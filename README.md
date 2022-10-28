@@ -85,10 +85,13 @@ $ nix-diff /run/current-system ./result
 ```
 ## Testing
 
-You have to have `nix-diff` in PATH to run test from `golden-tests` folder.
-You also have to be in that folder and to have nix in your system.
+You have to have `nix-diff` and `bats` in PATH to run test from 
+`golden-tests` folder. You also have to be in that folder and to
+have nix in your system.
 
-Basically, you can run test, using `cabal exec bash -- -c "cd golden-tests; ./run-test.sh"` command.
+Basically, you can run test, using 
+`cabal build; cabal exec bash -- -c "cd golden-tests; bats ./run-test.sh"`
+command.
 
 ## Development status
 

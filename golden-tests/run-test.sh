@@ -1,9 +1,14 @@
-#!/usr/bin/env bash
+#!/usr/bin/env bats
 
-old_drv="$(nix-instantiate ./old-derivation/drv.nix)"
-new_drv="$(nix-instantiate ./new-derivation/drv.nix)"
-nix-diff $old_drv $new_drv --environment > /tmp/nix-diff-output
-diff ./expected-output /tmp/nix-diff-output
-code="$?"
-rm /tmp/nix-diff-output
-exit "$code"
+setup(){
+  export OLD_DRV="$(nix-instantiate ./old-derivation/drv.nix)"
+  export NEW_DRV="$(nix-instantiate ./new-derivation/drv.nix)"
+}
+
+@test "human readable" {
+  helpers/run-diff.sh ./expected-outputs/human-readable --environment
+}
+
+@test "json" {
+  helpers/run-diff.sh ./expected-outputs/json --environment --json
+}
